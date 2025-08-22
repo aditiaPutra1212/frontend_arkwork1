@@ -16,7 +16,7 @@ export const API_BASE =
   cleanBase(process.env.NEXT_PUBLIC_API_URL) ||
   'http://localhost:4000';
 
-type ApiOpts = RequestInit & {
+type ApiOpts = Omit<RequestInit, 'body'> & {
   /** Jika diisi, otomatis set Content-Type dan body=JSON.stringify(json), method default POST.
    *  Jika `json` ada, maka `body` manual akan diabaikan agar tidak ambigu. */
   json?: unknown;
@@ -37,14 +37,15 @@ export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T>
 
   const { json, headers, expectJson = true, ...rest } = opts;
 
-  const finalHeaders: HeadersInit = { ...(headers || {}) };
+  // Normalisasi headers ke instance Headers supaya bisa .has() dan .set()
+  const finalHeaders = new Headers(headers as HeadersInit | undefined);
   let finalMethod: string | undefined = rest.method;
   let finalBody: BodyInit | null | undefined = rest.body as BodyInit | null | undefined;
 
-  // Jika caller pakai json, kita override body & (default) method
+  // Jika caller pakai json, override body & (default) method
   if (json !== undefined) {
-    if (!('Content-Type' in (finalHeaders as any))) {
-      finalHeaders['Content-Type'] = 'application/json';
+    if (!finalHeaders.has('Content-Type')) {
+      finalHeaders.set('Content-Type', 'application/json');
     }
     finalBody = JSON.stringify(json);
     if (!finalMethod) finalMethod = 'POST';
