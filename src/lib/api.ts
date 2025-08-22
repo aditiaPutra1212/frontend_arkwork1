@@ -1,7 +1,5 @@
 // frontend/src/lib/api.ts
 
-/* ====================== Backend helper (admin & lainnya) ====================== */
-
 function cleanBase(url: string | undefined): string {
   return (url || '')
     .trim()
@@ -10,15 +8,14 @@ function cleanBase(url: string | undefined): string {
     .replace(/\/+$/, '');
 }
 
-// Urutan prioritas: NEXT_PUBLIC_API_BASE > NEXT_PUBLIC_API_URL > localhost (dev)
 export const API_BASE =
   cleanBase(process.env.NEXT_PUBLIC_API_BASE) ||
   cleanBase(process.env.NEXT_PUBLIC_API_URL) ||
   'http://localhost:4000';
 
-type ApiOpts = Omit<RequestInit, 'body'> & {
-  /** Jika diisi, otomatis set Content-Type dan body=JSON.stringify(json), method default POST.
-   *  Jika `json` ada, maka `body` manual akan diabaikan agar tidak ambigu. */
+type ApiOpts = RequestInit & {
+  /** Jika diisi, otomatis set Content-Type & body JSON; method default POST.
+   *  Jika `json` ada, `body` manual akan diabaikan agar tidak ambigu. */
   json?: unknown;
   /** Jika respons 204 No Content, default return null */
   expectJson?: boolean; // default: true
@@ -28,16 +25,14 @@ type ApiOpts = Omit<RequestInit, 'body'> & {
  * Panggil backend Express (cookie ikut terkirim).
  * Contoh:
  *   await api('/admin/signin', { json: { username, password } })
- *   await api('/admin/plans/123', { method: 'PUT', json: payload })
- *   await api('/admin/plans/123', { method: 'PUT', headers: {...}, body: JSON.stringify(payload) })
- *   const me = await api('/auth/me')
+ *   const me = await api('/admin/me')
  */
 export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T> {
   if (!API_BASE) throw new Error('NEXT_PUBLIC_API_BASE belum diset');
 
   const { json, headers, expectJson = true, ...rest } = opts;
 
-  // Normalisasi headers ke instance Headers supaya bisa .has() dan .set()
+  // Normalisasi headers ke instance Headers supaya bisa .has()/.set()
   const finalHeaders = new Headers(headers as HeadersInit | undefined);
   let finalMethod: string | undefined = rest.method;
   let finalBody: BodyInit | null | undefined = rest.body as BodyInit | null | undefined;
@@ -56,7 +51,7 @@ export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T>
     method: finalMethod ?? (finalBody != null ? 'POST' : 'GET'),
     headers: finalHeaders,
     body: finalBody ?? undefined,
-    credentials: 'include', // ⬅️ wajib supaya cookie token ikut
+    credentials: 'include',
     cache: 'no-store',
   });
 
@@ -65,9 +60,7 @@ export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T>
     try {
       const data = await res.json();
       msg = data?.message || data?.error || msg;
-    } catch {
-      // bukan JSON, biarkan msg default
-    }
+    } catch {}
     throw new Error(msg);
   }
 
@@ -88,11 +81,11 @@ export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T>
 export type Scope = 'id' | 'global' | 'both';
 
 export interface FetchEnergyNewsParams {
-  scope: Scope;        // 'id' | 'global' | 'both'
-  limit: number;       // jumlah item
-  lang: string;        // 'id' | 'en'
-  country: string;     // 'ID' | 'US' | ISO-2 lain
-  keywords?: string;   // "pertamina, geothermal"
+  scope: Scope;
+  limit: number;
+  lang: string;
+  country: string;
+  keywords?: string;
 }
 
 export interface EnergyNewsItem {
@@ -124,7 +117,6 @@ function getDomain(url?: string): string {
   }
 }
 
-// Build Google News RSS URL
 function buildGoogleNewsRssUrl(params: { q: string; lang: string; country: string }) {
   const { q, lang, country } = params;
   const hl = `${lang}-${country}`;
@@ -152,8 +144,7 @@ async function fetchRssAsJson(rssUrl: string) {
 
 function buildQuery(baseKeywords?: string) {
   const defaults = [
-    'oil', 'gas', 'energy', 'petroleum', 'geothermal', 'renewable',
-    'minyak', 'energi', 'migas',
+    'oil','gas','energy','petroleum','geothermal','renewable','minyak','energi','migas',
   ];
   const extra = (baseKeywords || '')
     .split(',')
@@ -187,10 +178,6 @@ function mapItem(it: any): EnergyNewsItem {
   };
 }
 
-/**
- * Ambil berita energi dari Google News (via rss2json).
- * NOTE: Public API ini ada rate limit. Untuk produksi, pertimbangkan proxy/route server sendiri.
- */
 export async function fetchEnergyNews(
   params: FetchEnergyNewsParams
 ): Promise<EnergyNewsResponse> {
@@ -204,7 +191,6 @@ export async function fetchEnergyNews(
   if (scope === 'global' || scope === 'both') {
     urls.push(buildGoogleNewsRssUrl({ q, lang: 'en', country: 'US' }));
   }
-  // Jika scope spesifik & user menentukan lang/country lain, pakai itu saja
   if (
     scope !== 'both' &&
     !((scope === 'id' && lang === 'id' && country === 'ID') ||
@@ -225,7 +211,6 @@ export async function fetchEnergyNews(
     }
   }
 
-  // de-dupe by link/title
   const seen = new Set<string>();
   const deduped = items.filter(it => {
     const key = it.link || it.title;
