@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
+/* ===================== Config ===================== */
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE?.replace(/\/+$/, '') || 'http://localhost:4000';
+const DEFAULT_CHAT_API = `${API_BASE}/api/chat`;
+
 /* ===================== Types ===================== */
 type Msg = { id: string; role: 'user' | 'assistant'; text: string; ts: number };
 type Profile = {
@@ -17,7 +22,6 @@ type Profile = {
 /* ===================== Consts ===================== */
 const STORAGE_KEY = 'ogm-chat-history-v1';
 const PROFILE_KEY = 'ogm-chat-profile-v1';
-const DEFAULT_CHAT_API = '/api/chat';
 
 /* ===================== Utils ===================== */
 function formatTime(ts: number) {
@@ -111,6 +115,8 @@ export default function ChatbotWidget({ chatApi = DEFAULT_CHAT_API }: { chatApi?
       const res = await fetch(chatApi, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // Chat endpoint tidak butuh cookie; jika butuh session, ganti ke: credentials: 'include'
+        credentials: 'omit',
         body: JSON.stringify({
           intent,
           profile,
@@ -122,10 +128,22 @@ export default function ChatbotWidget({ chatApi = DEFAULT_CHAT_API }: { chatApi?
       });
 
       let reply = '⚠️ Server tidak mengembalikan jawaban.';
-      try {
-        const data = await res.json();
-        reply = (res.ok && (data.answer || data.message)) || reply;
-      } catch {}
+      if (!res.ok) {
+        // coba ambil message error dari server
+        try {
+          const errData = await res.json();
+          reply = errData?.answer || errData?.message || reply;
+        } catch {
+          // tetap pakai reply default
+        }
+      } else {
+        try {
+          const data = await res.json();
+          reply = data?.answer || data?.message || reply;
+        } catch {
+          // kalau tidak JSON, biarkan reply default
+        }
+      }
 
       const a: Msg = { id: rid(), role: 'assistant', text: reply, ts: Date.now() };
       setMsgs((m) => [...m, a]);
