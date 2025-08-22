@@ -2,14 +2,22 @@
 
 /* ====================== Backend helper (admin & lainnya) ====================== */
 
+function cleanBase(url: string | undefined): string {
+  return (url || '')
+    .trim()
+    .replace(/\s+/g, ' ')               // hapus whitespace aneh
+    .replace(/\n+|\r+/g, '')            // hapus newline
+    .replace(/\/+$/, '');               // hapus slash di akhir
+}
+
+// Urutan prioritas: NEXT_PUBLIC_API_BASE > NEXT_PUBLIC_API_URL > localhost (dev)
 export const API_BASE =
-  // dukung dua nama env, pilih salah satu yang ada
-  process.env.NEXT_PUBLIC_API_URL ||
-  process.env.NEXT_PUBLIC_API_BASE ||
+  cleanBase(process.env.NEXT_PUBLIC_API_BASE) ||
+  cleanBase(process.env.NEXT_PUBLIC_API_URL) ||
   'http://localhost:4000';
 
-type ApiOpts = RequestInit & {
-  /** Jika diisi, otomatis method=POST dan body=JSON.stringify(json) */
+type ApiOpts = Omit<RequestInit, 'body'> & {
+  /** Jika diisi, otomatis set Content-Type dan body=JSON.stringify(json), method default POST */
   json?: any;
   /** Jika respons 204 No Content, default return null */
   expectJson?: boolean; // default: true
@@ -19,35 +27,57 @@ type ApiOpts = RequestInit & {
  * Panggil backend Express (cookie ikut terkirim).
  * Contoh:
  *   await api('/admin/signin', { json: { username, password } })
- *   const me = await api('/admin/me')
+ *   const me = await api('/auth/me')
  */
 export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T> {
+  if (!API_BASE) throw new Error('NEXT_PUBLIC_API_BASE belum diset');
+
   const { json, headers, expectJson = true, ...rest } = opts;
 
-  const init: RequestInit = {
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(headers || {}),
-    },
-    ...(json !== undefined ? { method: rest.method ?? 'POST', body: JSON.stringify(json) } : {}),
-    ...rest,
-  };
+  const finalHeaders: HeadersInit = { ...(headers || {}) };
+  let body: BodyInit | undefined;
 
-  const res = await fetch(`${API_BASE}${path}`, init);
+  if (json !== undefined) {
+    // Jangan set Content-Type kalau caller sudah set sendiri
+    if (!('Content-Type' in (finalHeaders as any))) {
+      finalHeaders['Content-Type'] = 'application/json';
+    }
+    body = JSON.stringify(json);
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: rest.method ?? (json !== undefined ? 'POST' : 'GET'),
+    credentials: 'include', // ⬅️ wajib supaya cookie token terkirim/diterima
+    cache: 'no-store',
+    ...rest,
+    headers: finalHeaders,
+    body,
+  });
 
   if (!res.ok) {
-    // coba ambil pesan error dari JSON; kalau gagal pakai fallback
+    // Coba ambil pesan dari JSON error
     let msg = `Request failed ${res.status}`;
     try {
       const data = await res.json();
-      msg = (data?.message || data?.error || msg);
-    } catch { /* ignore */ }
+      msg = data?.message || data?.error || msg;
+    } catch {
+      // bukan JSON, biarkan msg default
+    }
     throw new Error(msg);
   }
 
   if (res.status === 204 || !expectJson) return null as unknown as T;
-  return res.json() as Promise<T>;
+
+  // Jika tidak ada body JSON (misal empty), kembalikan null agar tidak throw
+  const text = await res.text();
+  if (!text) return null as unknown as T;
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    // Fallback jika server balas non-JSON tapi expectJson = true
+    return text as unknown as T;
+  }
 }
 
 /* ================== Energy News (Google News RSS → rss2json) ================= */
@@ -119,7 +149,8 @@ async function fetchRssAsJson(rssUrl: string) {
 
 function buildQuery(baseKeywords?: string) {
   const defaults = [
-    'oil','gas','energy','petroleum','geothermal','renewable','minyak','energi','migas',
+    'oil', 'gas', 'energy', 'petroleum', 'geothermal', 'renewable',
+    'minyak', 'energi', 'migas',
   ];
   const extra = (baseKeywords || '')
     .split(',')
@@ -170,7 +201,7 @@ export async function fetchEnergyNews(
   if (scope === 'global' || scope === 'both') {
     urls.push(buildGoogleNewsRssUrl({ q, lang: 'en', country: 'US' }));
   }
-  // Jika scope spesifik dan user menentukan lang/country lain, pakai itu saja
+  // Jika scope spesifik & user menentukan lang/country lain, pakai itu saja
   if (
     scope !== 'both' &&
     !((scope === 'id' && lang === 'id' && country === 'ID') ||
