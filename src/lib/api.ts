@@ -5,9 +5,9 @@
 function cleanBase(url: string | undefined): string {
   return (url || '')
     .trim()
-    .replace(/\s+/g, ' ')               // hapus whitespace aneh
-    .replace(/\n+|\r+/g, '')            // hapus newline
-    .replace(/\/+$/, '');               // hapus slash di akhir
+    .replace(/\s+/g, ' ')
+    .replace(/\n+|\r+/g, '')
+    .replace(/\/+$/, '');
 }
 
 // Urutan prioritas: NEXT_PUBLIC_API_BASE > NEXT_PUBLIC_API_URL > localhost (dev)
@@ -16,9 +16,10 @@ export const API_BASE =
   cleanBase(process.env.NEXT_PUBLIC_API_URL) ||
   'http://localhost:4000';
 
-type ApiOpts = Omit<RequestInit, 'body'> & {
-  /** Jika diisi, otomatis set Content-Type dan body=JSON.stringify(json), method default POST */
-  json?: any;
+type ApiOpts = RequestInit & {
+  /** Jika diisi, otomatis set Content-Type dan body=JSON.stringify(json), method default POST.
+   *  Jika `json` ada, maka `body` manual akan diabaikan agar tidak ambigu. */
+  json?: unknown;
   /** Jika respons 204 No Content, default return null */
   expectJson?: boolean; // default: true
 };
@@ -27,6 +28,8 @@ type ApiOpts = Omit<RequestInit, 'body'> & {
  * Panggil backend Express (cookie ikut terkirim).
  * Contoh:
  *   await api('/admin/signin', { json: { username, password } })
+ *   await api('/admin/plans/123', { method: 'PUT', json: payload })
+ *   await api('/admin/plans/123', { method: 'PUT', headers: {...}, body: JSON.stringify(payload) })
  *   const me = await api('/auth/me')
  */
 export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T> {
@@ -35,27 +38,28 @@ export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T>
   const { json, headers, expectJson = true, ...rest } = opts;
 
   const finalHeaders: HeadersInit = { ...(headers || {}) };
-  let body: BodyInit | undefined;
+  let finalMethod: string | undefined = rest.method;
+  let finalBody: BodyInit | null | undefined = rest.body as BodyInit | null | undefined;
 
+  // Jika caller pakai json, kita override body & (default) method
   if (json !== undefined) {
-    // Jangan set Content-Type kalau caller sudah set sendiri
     if (!('Content-Type' in (finalHeaders as any))) {
       finalHeaders['Content-Type'] = 'application/json';
     }
-    body = JSON.stringify(json);
+    finalBody = JSON.stringify(json);
+    if (!finalMethod) finalMethod = 'POST';
   }
 
   const res = await fetch(`${API_BASE}${path}`, {
-    method: rest.method ?? (json !== undefined ? 'POST' : 'GET'),
-    credentials: 'include', // ⬅️ wajib supaya cookie token terkirim/diterima
-    cache: 'no-store',
     ...rest,
+    method: finalMethod ?? (finalBody != null ? 'POST' : 'GET'),
     headers: finalHeaders,
-    body,
+    body: finalBody ?? undefined,
+    credentials: 'include', // ⬅️ wajib supaya cookie token ikut
+    cache: 'no-store',
   });
 
   if (!res.ok) {
-    // Coba ambil pesan dari JSON error
     let msg = `Request failed ${res.status}`;
     try {
       const data = await res.json();
@@ -68,14 +72,12 @@ export async function api<T = any>(path: string, opts: ApiOpts = {}): Promise<T>
 
   if (res.status === 204 || !expectJson) return null as unknown as T;
 
-  // Jika tidak ada body JSON (misal empty), kembalikan null agar tidak throw
   const text = await res.text();
   if (!text) return null as unknown as T;
 
   try {
     return JSON.parse(text) as T;
   } catch {
-    // Fallback jika server balas non-JSON tapi expectJson = true
     return text as unknown as T;
   }
 }
